@@ -23,10 +23,15 @@ impl fmt::Display for DataType {
 pub enum Op {
     Add,
     Divide,
+    Drop,
+    Dup,
     Multiply,
+    Over,
     Push(Value),
     PrintLn,
+    Rot,
     Subtract,
+    Swap,
 }
 
 #[derive(Clone, Copy)]
@@ -37,7 +42,7 @@ union Data {
 
 #[derive(Clone, Copy)]
 pub struct Value {
-    data_type: DataType,
+    pub data_type: DataType,
     data: Data,
 }
 
@@ -137,6 +142,11 @@ impl fmt::Display for Op {
             Op::Divide => write!(f, "div"),
             Op::Multiply => write!(f, "mul"),
             Op::Push(value) => write!(f, "push {}", value),
+            Op::Dup => write!(f, "dup"),
+            Op::Drop => write!(f, "drop"),
+            Op::Swap => write!(f, "swap"),
+            Op::Over => write!(f, "over"),
+            Op::Rot => write!(f, "rot"),
             Op::PrintLn => write!(f, "println"),
         }
     }
@@ -185,8 +195,23 @@ impl VM {
                     let v2 = stack.pop().unwrap();
                     stack.push(v2 * v1);
                 }
-                Op::Push(value) => {
-                    stack.push(*value);
+                Op::Push(value) => stack.push(*value),
+                Op::Dup => stack.push(*stack.last().unwrap()),
+                Op::Drop => { stack.pop(); },
+                Op::Over => {
+                    // a b => a b a
+                    let v = stack[stack.len() - 2];
+                    stack.push(v);
+                }
+                Op::Rot => {
+                    // a b c => b c a
+                    let v = stack.remove(stack.len() - 3);
+                    stack.push(v);
+                }
+                Op::Swap => {
+                    // a b => b a
+                    let v = stack.remove(stack.len() - 2);
+                    stack.push(v);
                 }
                 Op::PrintLn => {
                     let v = stack.pop().unwrap();

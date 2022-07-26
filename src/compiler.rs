@@ -2,6 +2,8 @@ use std::fs;
 use std::path::Path;
 use std::num::IntErrorKind;
 
+use colored::*;
+
 use crate::scanner::{Scanner, TokenType, Token};
 use crate::vm::{DataType, Op, Value, VM};
 
@@ -13,7 +15,7 @@ struct CompilerContext<'a> {
     had_error: bool,
 }
 
-pub fn compile(file_path: &String) {
+pub fn compile(file_path: &String, verbose: bool) {
     let path = Path::new(file_path.trim());
 
     let extension = path.extension();
@@ -44,26 +46,66 @@ pub fn compile(file_path: &String) {
         had_error: false,
     };
 
+    let start = std::time::Instant::now();
+
     loop {
         let token = scanner.scan_token();
 
+        #[cfg(debug_assertions)]
+        if verbose {
+            println!("{}", token);
+        }
+
         match token.token_type {
+            TokenType::Dup => {
+                if compiler.stack.is_empty() {
+                    error(&token, &mut compiler, "no data on the stack to dup".to_string());
+                } else {
+                    compiler.push_op(Op::Dup);
+                }
+            }
+            TokenType::Drop => {
+                if compiler.stack.is_empty() {
+                    error(&token, &mut compiler, "no data on the stack to drop".to_string());
+                } else {
+                    compiler.push_op(Op::Drop);
+                }
+            }
             TokenType::EndOfFile => break,
             TokenType::Error => error(&token, &mut compiler, "invalid token".to_string()),
-            TokenType::False => {
-                compiler.push_op(Op::Push(Value::from_bool(false)));
-                compiler.stack.push(DataType::Bool);
-            },
+            TokenType::False => compiler.push_op(Op::Push(Value::from_bool(false))),
             TokenType::Int => int(&token, &mut compiler),
             TokenType::Minus => subtract(&token, &mut compiler),
+            TokenType::Over => {
+                let len = compiler.stack.len();
+                if len < 2 {
+                    error(&token, &mut compiler, format!("need 2 elements on the stack to perform over but found {}", len));
+                } else {
+                    compiler.push_op(Op::Over);
+                }
+            }
             TokenType::Plus => add(&token, &mut compiler),
             TokenType::PrintLn => println(&token, &mut compiler),
             TokenType::Slash => divide(&token, &mut compiler),
+            TokenType::Rot => {
+                let len = compiler.stack.len();
+                if len < 3 {
+                    error(&token, &mut compiler, format!("need 3 elements on the stack to perform rot but found {}", len));
+                } else {
+                    compiler.push_op(Op::Rot);
+                }
+            }
             TokenType::Star => multiply(&token, &mut compiler),
-            TokenType::True => {
-                compiler.push_op(Op::Push(Value::from_bool(true)));
-                compiler.stack.push(DataType::Bool);
-            },
+            TokenType::Swap => {
+                let len = compiler.stack.len();
+                if len < 2 {
+                    error(&token, &mut compiler, format!("need 2 elements on the stack to perform swap but found {}", len));
+                } else {
+                    compiler.push_op(Op::Swap);
+                }
+            } 
+            TokenType::True => compiler.push_op(Op::Push(Value::from_bool(true))),
+            TokenType::Identifier => error(&token, &mut compiler, "identifiers are not implemented yet".to_string())
         }
 
         if compiler.had_error {
@@ -77,6 +119,10 @@ pub fn compile(file_path: &String) {
         return;
     }
 
+    if verbose {
+        println!("Compilation succeeded in {:?}", start.elapsed());
+    }
+
     #[cfg(debug_assertions)]
     compiler.vm.print_ops();
 
@@ -85,6 +131,26 @@ pub fn compile(file_path: &String) {
 
 impl<'a> CompilerContext<'a> {
     fn push_op(&mut self, op: Op) {
+        match op {
+            Op::Add|Op::Divide|Op::Subtract|Op::Multiply|Op::Drop|Op::PrintLn => { self.stack.pop(); },
+            Op::Dup => self.stack.push(*self.stack.last().unwrap()),
+            Op::Over => {
+                // a b => a b a
+                self.stack.push(self.stack[self.stack.len() - 2]);
+            }
+            Op::Push(value) => self.stack.push(value.data_type),
+            Op::Rot => {
+                // a b c => b c a
+                let v = self.stack.remove(self.stack.len() - 3);
+                self.stack.push(v);
+            }
+            Op::Swap => {
+                // a b => b a
+                let v = self.stack.remove(self.stack.len() - 2);
+                self.stack.push(v);
+            }
+        };
+
         self.vm.push_op(op);
     }
 }
@@ -119,7 +185,6 @@ fn int(token: &Token, compiler: &mut CompilerContext) {
         return;
     }
 
-    compiler.stack.push(DataType::Int);
     compiler.push_op(Op::Push(Value::from_int(parse_result.unwrap())));
 }
 
@@ -137,8 +202,8 @@ fn add(token: &Token, compiler: &mut CompilerContext) {
         error(token, compiler, format!("expected integer one down from the top of the stack to perform addition, found {}", compiler.stack[len - 2]));
         return;
     }
+
     compiler.push_op(Op::Add);
-    compiler.stack.pop();   // will pop 2 ints and push 1, so popping 1 will leave it in the right state
 }
 
 fn subtract(token: &Token, compiler: &mut CompilerContext) {
@@ -156,7 +221,6 @@ fn subtract(token: &Token, compiler: &mut CompilerContext) {
         return;
     }
     compiler.push_op(Op::Subtract);
-    compiler.stack.pop();   // will pop 2 ints and push 1, so popping 1 will leave it in the right state
 }
 
 fn multiply(token: &Token, compiler: &mut CompilerContext) {
@@ -174,7 +238,6 @@ fn multiply(token: &Token, compiler: &mut CompilerContext) {
         return;
     }
     compiler.push_op(Op::Multiply);
-    compiler.stack.pop();   // will pop 2 ints and push 1, so popping 1 will leave it in the right state
 }
 
 fn divide(token: &Token, compiler: &mut CompilerContext) {
@@ -192,23 +255,31 @@ fn divide(token: &Token, compiler: &mut CompilerContext) {
         return;
     }
     compiler.push_op(Op::Divide);
-    compiler.stack.pop();   // will pop 2 ints and push 1, so popping 1 will leave it in the right state
 }
 
 fn println(token: &Token, compiler: &mut CompilerContext) {
-    if compiler.stack.len() == 0 {
+    if compiler.stack.is_empty() {
         error(token, compiler, "nothing on stack to print".to_string());
         return;
     }
     compiler.push_op(Op::PrintLn);
-    compiler.stack.pop();
 }
 
 fn error(token: &Token, compiler: &mut CompilerContext, message: String) {
     compiler.had_error = true;
-    eprintln!("Error: {}", message);
+    eprintln!("{} at '{}': {}", "Compiler Error".red(), token.text, message);
     eprintln!("       --> {}:{}:{}", compiler.file_path, token.line, token.column);
     eprintln!("        |");
     eprintln!("{:7} | {}", token.line, get_code_at_line(token.line, compiler.code_string));
-    eprintln!("        |");
+    eprint!("        | ");
+
+    for _ in 0..token.column - 1{
+        eprint!(" ");
+    }
+
+    for _ in 0..token.length {
+        eprint!("{}", "^".red());
+    }
+
+    eprintln!();
 }

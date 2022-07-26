@@ -3,8 +3,13 @@ use std::fmt;
 use phf::phf_map;
 
 static KEYWORDS: phf::Map<&'static str, TokenType> = phf_map! {
+    "dup" => TokenType::Dup,
+    "drop" => TokenType::Drop,
     "false" => TokenType::False,
+    "over" => TokenType::Over,
     "println" => TokenType::PrintLn,
+    "rot" => TokenType::Rot,
+    "swap" => TokenType::Swap,
     "true" => TokenType::True,
 };
 
@@ -20,7 +25,7 @@ pub struct Scanner<'a> {
 pub struct Token<'a> {
     pub token_type: TokenType,
     start: usize,
-    length: usize,
+    pub length: usize,
     pub line: usize,
     pub column: usize,
     pub text: &'a str,
@@ -28,21 +33,27 @@ pub struct Token<'a> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TokenType {
+    Dup,
+    Drop,
     EndOfFile,
     Error,
     False,
+    Identifier,
     Int,
     Minus,
+    Over,
     Plus,
     PrintLn,
+    Rot,
     Slash,
     Star,
+    Swap,
     True,
 }
 
 impl<'a> fmt::Display for Token<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Token [ type: {:?}, start: {}, length: {}, line: {}, text: '{}' ]", self.token_type, self.start, self.length, self.line, self.text)
+        write!(f, "Token [ type: {:?}, start: {}, length: {}, line: {}, column: {}, text: '{}' ]", self.token_type, self.start, self.length, self.line, self.column, self.text)
     }
 }
 
@@ -68,7 +79,7 @@ impl<'a> Scanner<'a> {
 
         let current_char = self.advance().unwrap(); 
 
-        if current_char.is_digit(10) {
+        if current_char.is_ascii_digit() {
             return self.make_number();
         }
 
@@ -107,9 +118,9 @@ impl<'a> Scanner<'a> {
 
             match self.code_bytes[self.current] as char {
                 '\n' => {
+                    self.advance();
                     self.line += 1;
                     self.column = 1;
-                    self.advance();
                 },
                 ' '|'\r' => {
                     self.advance();
@@ -135,20 +146,22 @@ impl<'a> Scanner<'a> {
         }
 
         let text = &self.code_string.as_str()[self.start..self.current];
-        if KEYWORDS.contains_key(text) {
-            self.make_token(*KEYWORDS.get(text).unwrap())
-        } else {
-            self.error_token()
-        }
+
+        let value = KEYWORDS.get(text);
+        match value {
+            Some(v) => self.make_token(*v),
+            None => self.make_token(TokenType::Identifier),
+        }        
     }
 
     fn make_token(&self, token_type: TokenType) -> Token {
+        let length = self.current - self.start;
         Token {
             token_type,
             start: self.start,
-            length: self.current - self.start,
+            length,
             line: self.line,
-            column: self.column,
+            column: self.column - length,
             text: &self.code_string.as_str()[self.start..self.current],
         }
     }
